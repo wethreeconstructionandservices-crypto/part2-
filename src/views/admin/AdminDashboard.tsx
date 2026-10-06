@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Users, DollarSign, Bot, TrendingUp, TrendingDown, Activity, Server, Zap, ShieldCheck, AlertTriangle, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Users, DollarSign, Bot, TrendingUp, TrendingDown, Activity, Server, Zap, ShieldCheck, AlertTriangle, ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { adminClients, systemActivities } from '@/data/adminMockData';
 import { coins } from '@/data/mockData';
 import { useAdminCurrency } from '@/context/AdminCurrencyContext';
+import type { AdminClient } from '@/data/adminMockData';
+
+interface ActivityLog {
+  id: string;
+  admin_email: string;
+  admin_name: string | null;
+  action_type: string;
+  message: string;
+  severity: 'info' | 'warning' | 'critical' | 'success';
+  created_at: string;
+}
 
 const severityConfig = {
   info: 'text-slate-400',
@@ -26,28 +36,81 @@ export default function AdminDashboard() {
   const [botCount, setBotCount] = useState(0);
   const [activeBots, setActiveBots] = useState(0);
   const [tradeCount, setTradeCount] = useState(0);
+  const [clients, setClients] = useState<AdminClient[]>([]);
+  const [activities, setActivities] = useState<ActivityLog[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.from('bots').select('*').then(({ data }) => {
-      setBotCount(data?.length ?? 0);
-      setActiveBots(data?.filter(b => b.status === 'running').length ?? 0);
-    });
-    supabase.from('trade_history').select('*').then(({ data }) => {
-      setTradeCount(data?.length ?? 0);
-    });
+    let mounted = true;
+    (async () => {
+      const [{ data: botData }, { data: tradeData }, { data: profilesData }, { data: fundsData }, { data: licenseData }, { data: activityData }] =
+        await Promise.all([
+          supabase.from('bots').select('*'),
+          supabase.from('trades').select('*'),
+          supabase.from('profiles').select('*'),
+          supabase.from('user_funds').select('*'),
+          supabase.from('licenses').select('*'),
+          supabase.from('admin_activity_log').select('*').order('created_at', { ascending: false }).limit(10),
+        ]);
+      if (!mounted) return;
+      setBotCount(botData?.length ?? 0);
+      setActiveBots(botData?.filter((b: { status: string }) => b.status === 'running').length ?? 0);
+      setTradeCount(tradeData?.length ?? 0);
+
+      const profiles = profilesData ?? [];
+      const funds = fundsData ?? [];
+      const licenses = licenseData ?? [];
+      const mapped: AdminClient[] = profiles.map((p: { id: string; email: string; created_at: string }) => {
+        const fund = funds.find((f: { user_id: string }) => f.user_id === p.id);
+        const license = licenses.find((l: { user_id: string }) => l.user_id === p.id);
+        return {
+          id: p.id,
+          email: p.email,
+          name: p.email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          plan: license?.plan_name ?? 'Starter',
+          status: 'active' as const,
+          totalFunds: Number(fund?.balance ?? 0),
+          unrealizedPnl: Number(fund?.unrealized_pnl ?? 0),
+          realizedPnl: Number(fund?.realized_pnl ?? 0),
+          activeBots: 0,
+          manualTrading: false,
+          joinedDate: p.created_at?.split('T')[0] ?? '',
+          lastActive: '',
+          country: 'India',
+          licenseValidUntil: license?.valid_until ?? '',
+          licenseCycle: 'monthly' as const,
+          botLimit: Number(license?.bot_limit ?? 2),
+          unlockedStrategies: [],
+          unlockedIndicators: [],
+          connectedExchanges: [],
+        };
+      });
+      setClients(mapped);
+      setActivities((activityData as ActivityLog[]) ?? []);
+      setLoading(false);
+    })();
+    return () => { mounted = false; };
   }, []);
 
-  const totalClientFunds = adminClients.reduce((s, c) => s + c.totalFunds, 0);
-  const totalUnrealizedPnl = adminClients.reduce((s, c) => s + c.unrealizedPnl, 0);
-  const totalRealizedPnl = adminClients.reduce((s, c) => s + c.realizedPnl, 0);
-  const activeClients = adminClients.filter(c => c.status === 'active').length;
+  const totalClientFunds = clients.reduce((s, c) => s + c.totalFunds, 0);
+  const totalUnrealizedPnl = clients.reduce((s, c) => s + c.unrealizedPnl, 0);
+  const totalRealizedPnl = clients.reduce((s, c) => s + c.realizedPnl, 0);
+  const activeClients = clients.filter(c => c.status === 'active').length;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 text-neon-cyan animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-slide-up">
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard label="Total AUM" value={formatCompact(totalClientFunds)} icon={DollarSign} accent="cyan" sub="Under Management" />
-        <StatCard label="Active Clients" value={activeClients.toString()} icon={Users} accent="green" sub={`${adminClients.length} total`} />
+        <StatCard label="Active Clients" value={activeClients.toString()} icon={Users} accent="green" sub={`${clients.length} total`} />
         <StatCard label="Running Bots" value={activeBots.toString()} icon={Bot} accent="amber" sub={`${botCount} total deployed`} />
         <StatCard label="Total Trades" value={tradeCount.toString()} icon={Activity} accent="cyan" sub="all-time" />
       </div>
@@ -64,21 +127,21 @@ export default function AdminDashboard() {
             <div className="flex items-center justify-between p-3 rounded-xl bg-neon-green/5 border border-neon-green/10">
               <div>
                 <p className="text-[10px] text-slate-500 uppercase">Unrealized P&L</p>
-                <p className="text-xl font-bold text-neon-green font-mono">+{formatCurrency(totalUnrealizedPnl)}</p>
+                <p className="text-xl font-bold text-neon-green font-mono">{totalUnrealizedPnl >= 0 ? '+' : ''}{formatCurrency(totalUnrealizedPnl)}</p>
               </div>
-              <ArrowUpRight className="w-6 h-6 text-neon-green/50" />
+              {totalUnrealizedPnl >= 0 ? <ArrowUpRight className="w-6 h-6 text-neon-green/50" /> : <ArrowDownRight className="w-6 h-6 text-neon-red/50" />}
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-neon-cyan/5 border border-neon-cyan/10">
               <div>
                 <p className="text-[10px] text-slate-500 uppercase">Realized P&L</p>
-                <p className="text-xl font-bold text-neon-cyan font-mono">+{formatCurrency(totalRealizedPnl)}</p>
+                <p className="text-xl font-bold text-neon-cyan font-mono">{totalRealizedPnl >= 0 ? '+' : ''}{formatCurrency(totalRealizedPnl)}</p>
               </div>
               <TrendingUp className="w-6 h-6 text-neon-cyan/50" />
             </div>
             <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03]">
               <div>
                 <p className="text-[10px] text-slate-500 uppercase">Total Platform P&L</p>
-                <p className="text-xl font-bold text-white font-mono">+{formatCurrency(totalUnrealizedPnl + totalRealizedPnl)}</p>
+                <p className="text-xl font-bold text-white font-mono">{totalUnrealizedPnl + totalRealizedPnl >= 0 ? '+' : ''}{formatCurrency(totalUnrealizedPnl + totalRealizedPnl)}</p>
               </div>
               <Zap className="w-6 h-6 text-neon-amber/50" />
             </div>
@@ -92,8 +155,13 @@ export default function AdminDashboard() {
             System Activity Feed
           </h3>
           <div className="space-y-2 max-h-[300px] overflow-y-auto scrollbar-thin">
-            {systemActivities.map((a) => {
-              const Icon = typeIcon[a.type] || Activity;
+            {activities.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <Activity className="w-8 h-8 text-slate-600 mb-2" />
+                <p className="text-xs text-slate-500">No system activity recorded yet.</p>
+              </div>
+            ) : activities.map((a) => {
+              const Icon = typeIcon[a.action_type] || Activity;
               return (
                 <div key={a.id} className="flex items-start gap-3 py-2.5 px-3 rounded-xl hover:bg-white/[0.03] transition-colors">
                   <div className={`w-8 h-8 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center flex-shrink-0`}>
@@ -102,9 +170,9 @@ export default function AdminDashboard() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-200">{a.message}</p>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[10px] text-slate-500">{a.user}</span>
+                      <span className="text-[10px] text-slate-500">{a.admin_email}</span>
                       <span className="text-[10px] text-slate-600">·</span>
-                      <span className="text-[10px] text-slate-500">{a.timestamp}</span>
+                      <span className="text-[10px] text-slate-500">{new Date(a.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                   </div>
                   <span className={`text-[9px] font-bold uppercase ${severityConfig[a.severity]}`}>{a.severity}</span>
@@ -124,25 +192,32 @@ export default function AdminDashboard() {
             Top Clients by AUM
           </h3>
           <div className="space-y-2">
-            {[...adminClients].sort((a, b) => b.totalFunds - a.totalFunds).slice(0, 5).map((c) => (
-              <div key={c.id} className="flex items-center justify-between py-2 px-3 rounded-xl hover:bg-white/[0.03] transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.06] flex items-center justify-center text-[10px] font-bold text-slate-300">
-                    {c.email.split('@')[0].slice(0, 2).toUpperCase()}
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-white">{c.email.split('@')[0]}</p>
-                    <p className="text-[10px] text-slate-500">{c.plan} · {c.activeBots} bots</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-mono text-slate-200">{formatCurrency(c.totalFunds)}</p>
-                  <p className={`text-[10px] font-semibold ${c.unrealizedPnl >= 0 ? 'text-neon-green' : 'text-neon-red'}`}>
-                    {c.unrealizedPnl >= 0 ? '+' : ''}{formatCurrency(c.unrealizedPnl)}
-                  </p>
-                </div>
+            {clients.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <Users className="w-8 h-8 text-slate-600 mb-2" />
+                <p className="text-xs text-slate-500">No clients registered yet.</p>
               </div>
-            ))}
+            ) : (
+              [...clients].sort((a, b) => b.totalFunds - a.totalFunds).slice(0, 5).map((c) => (
+                <div key={c.id} className="flex items-center justify-between py-2 px-3 rounded-xl hover:bg-white/[0.03] transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.06] flex items-center justify-center text-[10px] font-bold text-slate-300">
+                      {c.email.split('@')[0].slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-white">{c.email.split('@')[0]}</p>
+                      <p className="text-[10px] text-slate-500">{c.plan} · {c.activeBots} bots</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-mono text-slate-200">{formatCurrency(c.totalFunds)}</p>
+                    <p className={`text-[10px] font-semibold ${c.unrealizedPnl >= 0 ? 'text-neon-green' : 'text-neon-red'}`}>
+                      {c.unrealizedPnl >= 0 ? '+' : ''}{formatCurrency(c.unrealizedPnl)}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
 

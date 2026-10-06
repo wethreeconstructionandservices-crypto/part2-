@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Users, Search, TrendingUp, TrendingDown,
   DollarSign, Bot, Pencil, Trash2, LogIn, X, Check, Zap, Shield,
   Calendar, ChevronDown, ChevronUp, Crown, Sparkles, AlertTriangle, UserCog,
-  KeyRound, Rocket, Clock, Plus, Minus, Plug, ArrowUpRight, ArrowDownRight, History
+  KeyRound, Rocket, Clock, Plus, Minus, Plug, ArrowUpRight, ArrowDownRight, History,
+  Loader2
 } from 'lucide-react';
 import {
-  adminClients, type AdminClient, type ConnectedExchange,
+  type AdminClient, type ConnectedExchange,
   allStrategies, allIndicators, licenseCycleConfig, type LicenseCycle,
   indianExchanges,
 } from '@/data/adminMockData';
@@ -30,33 +31,26 @@ const planConfig: Record<string, { color: string; icon: typeof Crown }> = {
 
 type ModalMode = 'edit' | 'license' | 'impersonate' | 'remove' | 'trade' | 'history' | null;
 
-interface DemoTrade {
+interface ClientTrade {
   id: string;
   coin: string;
-  marketType: string;
+  market_type: string;
   direction: string;
-  entryPrice: number;
-  exitPrice?: number;
+  entry_price: number;
   quantity: number;
   leverage: number;
-  pnl: number;
-  status: 'Active' | 'Closed TP' | 'Closed SL';
-  time: string;
+  status: string;
+  created_at: string;
+  executed_by: string;
 }
-
-const dummyClientTrades: Record<string, DemoTrade[]> = {
-  default: [
-    { id: 'dt-1', coin: 'BTC', marketType: 'futures', direction: 'long', entryPrice: 63500, exitPrice: 65200, quantity: 0.15, leverage: 10, pnl: 255.00, status: 'Closed TP', time: '2 hours ago' },
-    { id: 'dt-2', coin: 'ETH', marketType: 'futures', direction: 'short', entryPrice: 3420, quantity: 1.2, leverage: 5, pnl: 84.50, status: 'Active', time: '4 hours ago' },
-    { id: 'dt-3', coin: 'SOL', marketType: 'spot', direction: 'long', entryPrice: 142.5, exitPrice: 138.0, quantity: 15, leverage: 1, pnl: -67.50, status: 'Closed SL', time: 'Yesterday' },
-  ]
-};
 
 export default function AdminClients() {
   const { formatCurrency } = useAdminCurrency();
   const { user } = useAuth();
   const [search, setSearch] = useState('');
-  const [clients, setClients] = useState<AdminClient[]>(adminClients);
+  const [clients, setClients] = useState<AdminClient[]>([]);
+  const [clientTrades, setClientTrades] = useState<ClientTrade[]>([]);
+  const [loadingTrades, setLoadingTrades] = useState(false);
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selected, setSelected] = useState<AdminClient | null>(null);
   const [sortField, setSortField] = useState<'totalFunds' | 'unrealizedPnl' | 'activeBots' | 'licenseValidUntil'>('totalFunds');
@@ -87,6 +81,54 @@ export default function AdminClients() {
   const [stopLossPct, setStopLossPct] = useState<number | ''>(2);
   const [executingTrade, setExecutingTrade] = useState(false);
   const [tradeSuccessMsg, setTradeSuccessMsg] = useState(false);
+  const [loadingClients, setLoadingClients] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const [{ data: profilesData }, { data: fundsData }, { data: botsData }, { data: licensesData }] =
+        await Promise.all([
+          supabase.from('profiles').select('*'),
+          supabase.from('user_funds').select('*'),
+          supabase.from('bots').select('*'),
+          supabase.from('licenses').select('*'),
+        ]);
+      if (!mounted) return;
+      const profiles = profilesData ?? [];
+      const funds = fundsData ?? [];
+      const bots = botsData ?? [];
+      const licenses = licensesData ?? [];
+      const mapped: AdminClient[] = profiles.map((p: { id: string; email: string; created_at: string }) => {
+        const fund = funds.find((f: { user_id: string }) => f.user_id === p.id);
+        const userBots = bots.filter((b: { user_id: string }) => b.user_id === p.id);
+        const license = licenses.find((l: { user_id: string }) => l.user_id === p.id);
+        return {
+          id: p.id,
+          email: p.email,
+          name: p.email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          plan: license?.plan_name ?? 'Starter',
+          status: 'active' as const,
+          totalFunds: Number(fund?.balance ?? 0),
+          unrealizedPnl: Number(fund?.unrealized_pnl ?? 0),
+          realizedPnl: Number(fund?.realized_pnl ?? 0),
+          activeBots: userBots.filter((b: { status: string }) => b.status === 'running').length,
+          manualTrading: Boolean(fund?.manual_trading_enabled),
+          joinedDate: p.created_at?.split('T')[0] ?? '',
+          lastActive: '',
+          country: 'India',
+          licenseValidUntil: license?.valid_until ?? new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+          licenseCycle: (license?.plan_name === 'Enterprise' ? 'yearly' : license?.plan_name === 'Pro' ? 'half-yearly' : 'monthly') as LicenseCycle,
+          botLimit: Number(license?.bot_limit ?? 2),
+          unlockedStrategies: [],
+          unlockedIndicators: [],
+          connectedExchanges: [] as ConnectedExchange[],
+        };
+      });
+      setClients(mapped);
+      setLoadingClients(false);
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const toggleSort = (field: typeof sortField) => {
     if (sortField === field) setSortAsc(!sortAsc);
@@ -152,10 +194,18 @@ export default function AdminClients() {
     setModalMode('trade');
   };
 
-  const openHistory = (client: AdminClient) => {
+  const openHistory = useCallback(async (client: AdminClient) => {
     setSelected(client);
     setModalMode('history');
-  };
+    setLoadingTrades(true);
+    const { data } = await supabase
+      .from('trades')
+      .select('*')
+      .eq('client_id', client.id)
+      .order('created_at', { ascending: false });
+    setClientTrades((data as ClientTrade[]) ?? []);
+    setLoadingTrades(false);
+  }, []);
 
   const closeModal = () => {
     setModalMode(null);
@@ -341,7 +391,24 @@ export default function AdminClients() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(c => {
+              {loadingClients ? (
+                <tr>
+                  <td colSpan={6} className="py-12">
+                    <div className="flex items-center justify-center">
+                      <Loader2 className="w-6 h-6 text-neon-cyan animate-spin" />
+                    </div>
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-12">
+                    <div className="flex flex-col items-center justify-center text-center">
+                      <Users className="w-10 h-10 text-slate-600 mb-2" />
+                      <p className="text-sm text-slate-500">No clients found.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : filtered.map(c => {
                 const expired = licenseExpired(c.licenseValidUntil);
                 const days = daysUntilExpiry(c.licenseValidUntil);
                 const PlanIcon = planConfig[c.plan]?.icon ?? Zap;
@@ -478,22 +545,29 @@ export default function AdminClients() {
             </div>
 
             <div className="space-y-2 max-h-[60vh] overflow-y-auto scrollbar-thin">
-              {(dummyClientTrades[selected.id] || dummyClientTrades.default).map(trade => (
+              {loadingTrades ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-5 h-5 text-neon-cyan animate-spin" />
+                </div>
+              ) : clientTrades.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <History className="w-8 h-8 text-slate-600 mb-2" />
+                  <p className="text-xs text-slate-500">No trades found for this client.</p>
+                </div>
+              ) : clientTrades.map(trade => (
                 <div key={trade.id} className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between text-xs font-mono">
                   <div className="flex items-center gap-3">
                     <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${trade.direction === 'long' ? 'bg-neon-green/15 text-neon-green' : 'bg-neon-red/15 text-neon-red'}`}>
                       {trade.direction} {trade.coin}
                     </span>
                     <div>
-                      <p className="text-white font-semibold">{trade.marketType.toUpperCase()} · {trade.leverage}x</p>
-                      <p className="text-[10px] text-slate-500">Entry: ${trade.entryPrice.toLocaleString()} {trade.exitPrice ? `-> Exit: $${trade.exitPrice.toLocaleString()}` : ''}</p>
+                      <p className="text-white font-semibold">{trade.market_type.toUpperCase()} · {trade.leverage}x</p>
+                      <p className="text-[10px] text-slate-500">Entry: ${Number(trade.entry_price).toLocaleString()} · Qty: {Number(trade.quantity).toFixed(4)}</p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className={`font-bold ${trade.pnl >= 0 ? 'text-neon-green' : 'text-neon-red'}`}>
-                      {trade.pnl >= 0 ? '+' : ''}{formatCurrency(trade.pnl)}
-                    </p>
-                    <p className="text-[10px] text-slate-400">{trade.status} · {trade.time}</p>
+                    <p className="text-[10px] font-bold capitalize text-slate-300">{trade.status.replace('_', ' ')}</p>
+                    <p className="text-[10px] text-slate-400">{new Date(trade.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</p>
                   </div>
                 </div>
               ))}

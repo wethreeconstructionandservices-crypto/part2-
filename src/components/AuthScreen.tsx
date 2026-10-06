@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BrainCircuit, Mail, Lock, LogIn, UserPlus, Loader2, AlertCircle } from 'lucide-react';
+import { BrainCircuit, Mail, Lock, LogIn, UserPlus, Loader as Loader2, CircleAlert as AlertCircle, CircleCheck as CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
 export default function AuthScreen() {
@@ -8,19 +8,32 @@ export default function AuthScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccess(null);
     setLoading(true);
 
-    const fn = mode === 'signin' ? signIn : signUp;
-    const { error } = await fn(email, password);
-
-    if (error) {
-      setError(error);
-      setLoading(false);
+    if (mode === 'signup') {
+      const { error } = await signUp(email, password);
+      if (error) {
+        setError(error);
+        setLoading(false);
+      } else {
+        setSuccess('Account created successfully. Please log in.');
+        setMode('signin');
+        setPassword('');
+        setLoading(false);
+      }
+    } else {
+      const { error } = await signIn(email, password);
+      if (error) {
+        setError(error);
+        setLoading(false);
+      }
     }
   };
 
@@ -47,7 +60,7 @@ export default function AuthScreen() {
           {/* Tab switcher */}
           <div className="flex gap-2 p-1 rounded-xl bg-base-800/50 mb-6">
             <button
-              onClick={() => { setMode('signin'); setError(null); }}
+              onClick={() => { setMode('signin'); setError(null); setSuccess(null); }}
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 ${
                 mode === 'signin' ? 'bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/30' : 'text-slate-400 hover:text-slate-200'
               }`}
@@ -56,7 +69,7 @@ export default function AuthScreen() {
               Sign In
             </button>
             <button
-              onClick={() => { setMode('signup'); setError(null); }}
+              onClick={() => { setMode('signup'); setError(null); setSuccess(null); }}
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 ${
                 mode === 'signup' ? 'bg-neon-green/15 text-neon-green border border-neon-green/30' : 'text-slate-400 hover:text-slate-200'
               }`}
@@ -115,6 +128,14 @@ export default function AuthScreen() {
               </div>
             )}
 
+            {/* Success */}
+            {success && (
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-neon-green/10 border border-neon-green/20 text-xs text-neon-green animate-slide-up">
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{success}</span>
+              </div>
+            )}
+
             {/* Submit */}
             <button
               type="submit"
@@ -145,7 +166,7 @@ export default function AuthScreen() {
           <p className="mt-5 text-center text-[11px] text-slate-500">
             {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
             <button
-              onClick={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); }}
+              onClick={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); setSuccess(null); }}
               className="text-neon-cyan hover:text-neon-green transition-colors font-semibold"
             >
               {mode === 'signin' ? 'Sign up' : 'Sign in'}

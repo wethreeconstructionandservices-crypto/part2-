@@ -88,6 +88,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.error('Failed to create profile:', profileError.message);
       }
     }
+
+    // Do NOT auto-login after signup — sign out the ephemeral session
+    // so the user is redirected to the login screen instead.
+    await supabase.auth.signOut();
+    setSession(null);
+    setProfile(null);
+
+
+    // Do NOT auto-login after signup — sign out the ephemeral session
+    // so the user is redirected to the login screen instead.
+    await supabase.auth.signOut();
+    setSession(null);
+    setProfile(null);
+
     return { error: null };
   };
 

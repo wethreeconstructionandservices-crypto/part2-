@@ -1,17 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
-import { CheckCircle2, AlertTriangle, Info, X, Zap, XCircle } from 'lucide-react';
-import { supabase, type Trade, type ClientUpdate } from '@/lib/supabase';
-import { useAuth } from '@/context/AuthContext';
+import { CircleCheck as CheckCircle2, TriangleAlert as AlertTriangle, Info, X, Circle as XCircle } from 'lucide-react';
+import { supabase, type ClientUpdate } from '@/lib/supabase';
 
 export interface ToastItem {
   id: string;
   title: string;
   message: string;
-  severity: 'info' | 'success' | 'warning' | 'critical' | 'trade';
+  severity: 'info' | 'success' | 'warning' | 'critical';
 }
 
 export default function RealtimeToast() {
-  const { user } = useAuth();
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const removeToast = useCallback((id: string) => {
@@ -25,28 +23,12 @@ export default function RealtimeToast() {
   }, [removeToast]);
 
   useEffect(() => {
-    if (!user?.id) return;
-
+    // No user ID filter — listen to ALL client_updates for testing
     const channel = supabase
       .channel('admin-control-feed')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'trades', filter: `client_id=eq.${user.id}` },
-        (payload) => {
-          const t = payload.new as Trade;
-          const directionLabel = t.direction === 'long' ? 'Buy (Long)' : 'Sell (Short)';
-          const toast: Omit<ToastItem, 'id'> = {
-            title: 'Master Admin Executed a Trade',
-            message: `${t.coin} ${directionLabel} — ${t.quantity.toFixed(4)} @ $${Number(t.entry_price).toLocaleString()} (${t.market_type}, ${t.leverage}x)`,
-            severity: 'trade',
-          };
-          addToast(toast);
-          console.log('[Realtime] New trade from admin:', t);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'client_updates', filter: `client_id=eq.${user.id}` },
+        { event: 'INSERT', schema: 'public', table: 'client_updates' },
         (payload) => {
           const u = payload.new as ClientUpdate;
           const toast: Omit<ToastItem, 'id'> = {
@@ -55,23 +37,6 @@ export default function RealtimeToast() {
             severity: u.severity as ToastItem['severity'],
           };
           addToast(toast);
-          console.log('[Realtime] New client update from admin:', u);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'trades', filter: `client_id=eq.${user.id}` },
-        (payload) => {
-          const t = payload.new as Trade;
-          if (t.status !== 'open') {
-            const toast: Omit<ToastItem, 'id'> = {
-              title: 'Trade Status Updated',
-              message: `${t.coin} position ${t.status === 'closed_tp' ? 'closed (Take Profit hit)' : t.status === 'closed_sl' ? 'closed (Stop Loss hit)' : 'cancelled'} by admin.`,
-              severity: t.status === 'closed_tp' ? 'success' : 'warning',
-            };
-            addToast(toast);
-            console.log('[Realtime] Trade updated by admin:', t);
-          }
         }
       )
       .subscribe((status) => {
@@ -81,7 +46,7 @@ export default function RealtimeToast() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, addToast]);
+  }, [addToast]);
 
   if (toasts.length === 0) return null;
 
@@ -100,7 +65,6 @@ function ToastCard({ toast, onClose }: { toast: ToastItem; onClose: () => void }
     warning: { icon: AlertTriangle, color: 'text-neon-amber', bg: 'bg-neon-amber/10', border: 'border-neon-amber/30', glow: 'neon-glow-amber' },
     critical: { icon: XCircle, color: 'text-neon-red', bg: 'bg-neon-red/10', border: 'border-neon-red/30', glow: 'neon-glow-red' },
     info: { icon: Info, color: 'text-neon-cyan', bg: 'bg-neon-cyan/10', border: 'border-neon-cyan/30', glow: 'neon-glow-cyan' },
-    trade: { icon: Zap, color: 'text-neon-green', bg: 'bg-neon-green/10', border: 'border-neon-green/30', glow: 'neon-glow-green' },
   };
 
   const c = config[toast.severity] ?? config.info;
@@ -114,14 +78,7 @@ function ToastCard({ toast, onClose }: { toast: ToastItem; onClose: () => void }
         <Icon className={`w-5 h-5 ${c.color}`} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <p className="text-sm font-bold text-white">{toast.title}</p>
-          {toast.severity === 'trade' && (
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-neon-green/15 text-neon-green border border-neon-green/30">
-              LIVE
-            </span>
-          )}
-        </div>
+        <p className="text-sm font-bold text-white mb-1">{toast.title}</p>
         <p className="text-xs text-slate-400 leading-relaxed">{toast.message}</p>
       </div>
       <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors flex-shrink-0">
